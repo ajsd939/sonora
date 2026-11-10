@@ -45,8 +45,9 @@ dotnet build -f net10.0-android -c Debug -t:SignAndroidPackage -p:EmbedAssemblie
 Without `EmbedAssembliesIntoApk=true` the APK is a fast-deployment package and aborts on
 launch unless the assemblies are pushed to the device separately.
 
-## Before you use this code
+## Licence
 
-The YouTube Music client library this app depends on is GPL v3.0, which is a claim about
-the licence of anything built against it. Sort out what you want the licence of this
-repository to be before depending on it in anything you ship.
+GNU General Public License, version 3 only. See `LICENSE`.
+
+That is not a stylistic choice: the YouTube Music client library this app builds against
+is GPL v3.0 itself, so anything distributed with it has to carry the same terms.
