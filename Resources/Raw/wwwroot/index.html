@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<meta name="color-scheme" content="dark" />
+	<title>Sonora</title>
+	<link rel="icon" href="data:," />
+
+	<!--
+		Bridge library served by the HybridWebView host itself (not a file in this
+		folder). It defines window.HybridWebView, which app.js talks to.
+	-->
+	<script src="_framework/hybridwebview.js"></script>
+
+	<!--
+		No CSS framework: app.css is the whole design system, so the first paint does not
+		wait on a network round trip.
+	-->
+	<link rel="stylesheet" href="app.css" />
+</head>
+
+<body>
+	<div class="app-shell">
+
+		<div class="frame">
+
+			<!-- Desktop navigation -->
+			<aside class="sidebar only-desktop">
+				<div class="brand">
+					<span class="brand-mark"><span data-icon="logo" class="ic ic-lg"></span></span>
+					<div class="brand-text">
+						<span class="brand-name">Sonora</span>
+						<span class="brand-sub">Songs, albums and artists</span>
+					</div>
+				</div>
+
+				<nav class="nav">
+					<button data-nav="home" class="nav-item"><span data-icon="home" class="ic"></span> Home</button>
+					<button data-nav="search" class="nav-item"><span data-icon="search" class="ic"></span> Search</button>
+					<button data-nav="library" class="nav-item"><span data-icon="library" class="ic"></span> Your Library</button>
+				</nav>
+			</aside>
+
+			<!-- Content column -->
+			<main class="main-pane">
+				<header class="pane-head">
+					<span class="brand-mark only-mobile"><span data-icon="logo" class="ic ic-lg"></span></span>
+					<button id="btnBack" hidden class="icon-round" aria-label="Back"><span data-icon="back" class="ic"></span></button>
+					<h1 id="viewTitle" class="pane-title">Home</h1>
+					<button data-nav="search" class="icon-round only-mobile" aria-label="Search"><span data-icon="search" class="ic"></span></button>
+				</header>
+
+				<div id="scroller" class="scroller">
+
+					<!-- HOME -->
+					<section id="view-home">
+						<p id="greeting" class="greeting"></p>
+
+						<h2 class="shelf-h">Jump into a mix</h2>
+						<div id="quickPicks" class="chips"></div>
+
+						<div id="homeStatus" class="status-line"></div>
+						<div id="homeGrid" class="grid-cards"></div>
+
+						<div id="homeContinue" class="shelf" hidden>
+							<h2 class="shelf-h">Pick up where you left off</h2>
+							<div id="homeContinueGrid" class="grid-cards"></div>
+						</div>
+					</section>
+
+					<!-- SEARCH -->
+					<section id="view-search" hidden>
+						<div class="search-wrap">
+							<div class="searchbar">
+								<span data-icon="search" class="ic text-3"></span>
+								<input id="searchInput" type="search" enterkeyhint="search" autocomplete="off" spellcheck="false"
+									placeholder="Artists, albums, songs…" />
+								<button id="searchSubmit" class="search-go">Search</button>
+							</div>
+
+							<div id="searchTabs" class="tabs" hidden>
+								<button data-tab="all" class="search-tab tab">Everything</button>
+								<button data-tab="songs" class="search-tab tab">Songs</button>
+								<button data-tab="albums" class="search-tab tab">Albums</button>
+								<button data-tab="artists" class="search-tab tab">Artists</button>
+							</div>
+						</div>
+
+						<p id="searchStatus" class="status-line"></p>
+						<div id="searchResults"></div>
+
+						<div id="searchEmpty" class="empty">
+							<span data-icon="search" class="ic-xl"></span>
+							<p class="empty-text">Look for a song, an album or an artist.</p>
+						</div>
+					</section>
+
+					<!-- ALBUM -->
+					<section id="view-album" hidden>
+						<div id="albumHero"></div>
+						<div id="albumTracks" class="rows"></div>
+					</section>
+
+					<!-- ARTIST -->
+					<section id="view-artist" hidden>
+						<div id="artistHero"></div>
+						<div id="artistBody"></div>
+					</section>
+
+					<!-- LIBRARY -->
+					<section id="view-library" hidden>
+						<div class="library-head">
+							<h2 class="shelf-h">Playlists</h2>
+							<button id="playlistNew" class="btn-text">New playlist</button>
+						</div>
+						<div id="libraryPlaylistGrid" class="grid-cards"></div>
+						<p id="libraryPlaylistNote" class="library-note">Make one with the plus on any song.</p>
+
+						<div class="library-head">
+							<h2 class="shelf-h">Saved tracks</h2>
+							<button id="libraryClear" class="btn-text">Clear</button>
+						</div>
+						<p class="library-note">Everything you have played is kept here, at the point you stopped.</p>
+						<div id="libraryList" class="rows"></div>
+						<div id="libraryEmpty" class="empty">
+							<span data-icon="library" class="ic-xl"></span>
+							<p class="empty-text">Nothing saved yet — press play on anything.</p>
+						</div>
+					</section>
+
+					<!-- OWN PLAYLIST -->
+					<section id="view-playlist" hidden>
+						<div id="playlistHero"></div>
+						<div id="playlistTracks" class="rows"></div>
+					</section>
+				</div>
+			</main>
+		</div>
+
+		<!-- Mobile navigation, directly above the player bar -->
+		<nav class="tabbar only-mobile">
+			<button data-nav="home" class="nav-item tabbar-item"><span data-icon="home" class="ic"></span> Home</button>
+			<button data-nav="search" class="nav-item tabbar-item"><span data-icon="search" class="ic"></span> Search</button>
+			<button data-nav="library" class="nav-item tabbar-item"><span data-icon="library" class="ic"></span> Library</button>
+		</nav>
+
+		<!-- Persistent player bar. Tapping it opens the full-screen player. -->
+		<footer class="bar">
+			<div class="bar-row">
+				<div id="openPlayer" class="bar-open" role="button" tabindex="0">
+					<div id="npCover" class="bar-art"><span data-icon="music" class="ic"></span></div>
+					<div class="bar-text">
+						<p id="npTitle" class="bar-title">Nothing playing</p>
+						<p id="npArtist" class="bar-sub">Search, then press play</p>
+					</div>
+				</div>
+
+				<div class="bar-volume only-desktop">
+					<button id="btnMute" class="ctl ctl-sm" aria-label="Mute"><span data-icon="volume" class="ic"></span></button>
+					<input id="volume" type="range" min="0" max="1" step="0.01" value="1" class="slider vol" aria-label="Volume" />
+				</div>
+
+				<button id="playerExpand" class="ctl ctl-sm" aria-label="Open player"><span data-icon="chevronUp" class="ic"></span></button>
+			</div>
+
+			<div class="bar-progress">
+				<span id="timeCurrent" class="time">0:00</span>
+				<input id="seek" type="range" min="0" max="1000" step="1" value="0" class="slider" aria-label="Seek" />
+				<span id="timeTotal" class="time">0:00</span>
+			</div>
+
+			<div class="bar-controls">
+				<button id="btnPrev" class="ctl" aria-label="Previous"><span data-icon="prev" class="ic-lg"></span></button>
+				<button id="btnPlay" class="play-md" aria-label="Play" disabled><span data-icon="play" class="ic-lg"></span></button>
+				<button id="btnNext" class="ctl" aria-label="Next"><span data-icon="next" class="ic-lg"></span></button>
+			</div>
+
+			<span id="recoverState" class="recover hidden"><span data-icon="loader" class="ic spin"></span><span id="recoverStateText">Reconnecting…</span></span>
+		</footer>
+	</div>
+
+	<!-- Full-screen player: artwork, transport and time-coded lyrics -->
+	<section id="playerView" class="player" hidden>
+		<div class="player-wash" id="playerWash" aria-hidden="true"></div>
+		<div class="player-veil" aria-hidden="true"></div>
+
+		<div class="player-inner" id="playerInner">
+			<div class="player-left">
+				<div class="player-head">
+					<button id="playerClose" class="icon-round" aria-label="Close player"><span data-icon="chevronDown" class="ic"></span></button>
+					<span class="player-kicker">Now playing</span>
+					<span class="player-slot" aria-hidden="true"></span>
+				</div>
+
+				<div class="player-art" id="playerArt">
+					<img id="playerCover" alt="" />
+				</div>
+
+				<h2 id="playerTitle" class="player-title">Nothing playing</h2>
+				<p id="playerArtist" class="player-artist">—</p>
+				<p id="playerAlbum" class="player-album"></p>
+
+				<div class="player-progress">
+					<span id="playerTimeCurrent" class="time">0:00</span>
+					<input id="playerSeek" type="range" min="0" max="1000" step="1" value="0" class="slider" aria-label="Seek" />
+					<span id="playerTimeTotal" class="time">0:00</span>
+				</div>
+
+				<div class="player-controls">
+					<button id="playerPrev" class="ctl" aria-label="Previous"><span data-icon="prev" class="ic-xl"></span></button>
+					<button id="playerPlay" class="play-md" aria-label="Play" disabled><span data-icon="play" class="ic-lg"></span></button>
+					<button id="playerNext" class="ctl" aria-label="Next"><span data-icon="next" class="ic-xl"></span></button>
+				</div>
+
+				<div class="player-volume">
+					<button id="playerMute" class="ctl ctl-sm" aria-label="Mute"><span data-icon="volume" class="ic"></span></button>
+					<input id="playerVolume" type="range" min="0" max="1" step="0.01" value="1" class="slider" aria-label="Volume" />
+				</div>
+			</div>
+
+			<div class="lyrics-pane">
+				<div class="lyrics-h">
+					<h3 class="shelf-h">Lyrics</h3>
+					<span class="lyrics-tools">
+						<span class="lyrics-source" id="playerLyricsSource"></span>
+						<button id="lyricsFullToggle" class="ctl ctl-sm lyrics-full-toggle" aria-label="Show lyrics full screen"><span id="lyricsFullIcon" data-icon="expand" class="ic"></span></button>
+					</span>
+				</div>
+				<div class="lyrics" id="playerLyrics"></div>
+			</div>
+		</div>
+	</section>
+
+	<!-- Toasts for transient events (reconnecting, resumed) -->
+	<div id="toasts" class="toasts"></div>
+
+	<!-- Shown when a track cannot be played -->
+	<div id="errorModal" class="modal hidden">
+		<div class="modal-card">
+			<div class="modal-head">
+				<span class="modal-alert"><span data-icon="alert" class="ic"></span></span>
+				<h3>Can’t play this</h3>
+			</div>
+			<p id="errorModalTitle" class="modal-title"></p>
+			<p id="errorModalBody" class="modal-body"></p>
+			<div class="modal-actions">
+				<button id="errorModalDismiss" class="btn-text">Dismiss</button>
+				<button id="errorModalRetry" class="btn-solid">Try again</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- Choose or start a playlist for the song the plus was pressed on -->
+	<div id="playlistModal" class="modal hidden">
+		<div class="modal-card">
+			<div class="modal-head">
+				<span class="modal-alert"><span data-icon="plus" class="ic"></span></span>
+				<h3>Add to playlist</h3>
+			</div>
+			<p id="playlistPickerSong" class="modal-title"></p>
+			<div id="playlistPickerList" class="picker-list"></div>
+			<div class="picker-new">
+				<input id="playlistNameInput" type="text" maxlength="60" placeholder="Name a new playlist" />
+				<button id="playlistCreate" class="btn-solid">Create</button>
+			</div>
+			<div class="modal-actions">
+				<button id="playlistPickerDismiss" class="btn-text">Dismiss</button>
+			</div>
+		</div>
+	</div>
+
+	<audio id="audio" preload="auto"></audio>
+
+	<script src="app.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,26 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+TestResults/
+*.binlog
+
+# Editors and tooling
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.pidb
+*.cache
+*.log
+
+# Operating system noise
+.DS_Store
+Thumbs.db
+
+# Signing material never belongs in a repository
+*.p12
+*.keystore
+!debug.keystore
