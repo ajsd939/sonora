@@ -27,6 +27,3 @@ Thumbs.db
 
 # Built distributables belong in GitHub Releases, not the repo
 installer/*.exe
-
-# Generated design scratch (raw icon candidates)
-vibe_images/
