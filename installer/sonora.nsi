@@ -11,7 +11,7 @@
 ; needs the .NET runtime installed first.
 
 !ifndef VERSION
-	!define VERSION "0.9.0-beta"
+	!define VERSION "0.9.1"
 !endif
 
 !ifndef PUBLISH_DIR
@@ -40,7 +40,7 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 
 ; Four numeric parts, whatever the label next to it says.
-VIProductVersion "0.9.0.0"
+VIProductVersion "0.9.1.0"
 VIAddVersionKey /LANG=0 "ProductName" "${APP_NAME}"
 VIAddVersionKey /LANG=0 "ProductVersion" "${VERSION}"
 VIAddVersionKey /LANG=0 "FileVersion" "${VERSION}"
