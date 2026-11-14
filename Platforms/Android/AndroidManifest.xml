@@ -11,5 +11,11 @@
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 	<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-	<application android:label="Sonora" />
+	<!-- The wake and Wi-Fi locks the service holds so the stream survives the screen off. -->
+	<uses-permission android:name="android.permission.WAKE_LOCK" />
+
+	<application
+		android:label="Sonora"
+		android:icon="@mipmap/ic_launcher"
+		android:roundIcon="@mipmap/ic_launcher_round" />
 </manifest>

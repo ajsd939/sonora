@@ -22,16 +22,11 @@ const LIBRARY_KEY = 'sonora.library.v1';
 const PLAYLISTS_KEY = 'sonora.playlists.v1';
 const SETTINGS_KEY = 'sonora.settings.v1';
 
-const QUICK_PICKS = [
-	{ label: 'Lofi beats', query: 'lofi hip hop radio' },
-	{ label: 'Deep focus', query: 'deep focus instrumental playlist' },
-	{ label: 'Jazz', query: 'jazz piano classics' },
-	{ label: 'Classical', query: 'classical music for study' },
-	{ label: 'Synthwave', query: 'synthwave mix' },
-	{ label: 'Ambient', query: 'ambient soundscapes long set' },
-	{ label: 'Afrobeats', query: 'afrobeats mix' },
-	{ label: 'Live sets', query: 'live dj set full' },
-];
+/**
+ * The conveyor lyric window is an Android affordance. The desktop shell keeps the full
+ * scrolling column, so every window behaviour below is gated on this flag.
+ */
+const IS_ANDROID = /android/i.test(navigator.userAgent);
 
 /* ------------------------------------------------------------------ icons (lucide) */
 
@@ -85,10 +80,10 @@ function hydrateIcons(root) {
 /* ------------------------------------------------------------------ dom */
 
 const els = {};
-['greeting', 'quickPicks', 'homeGrid', 'homeStatus', 'homeContinue', 'homeContinueGrid',
-	'searchInput', 'searchSubmit', 'searchTabs', 'searchResults', 'searchStatus', 'searchEmpty',
+['greeting', 'homeHint', 'homeContinue', 'homeContinueGrid', 'homeBlock', 'searchBlock',
+	'searchInput', 'searchSubmit', 'searchTabs', 'searchResults', 'searchStatus',
 	'albumHero', 'albumTracks', 'artistHero', 'artistBody', 'btnBack',
-	'libraryList', 'libraryEmpty', 'libraryClear', 'viewTitle', 'scroller',
+	'libraryList', 'libraryEmpty', 'libraryClear', 'scroller', 'playerBar',
 	'libraryPlaylistGrid', 'libraryPlaylistNote', 'playlistNew',
 	'playlistHero', 'playlistTracks',
 	'playlistModal', 'playlistPickerSong', 'playlistPickerList', 'playlistNameInput',
@@ -118,17 +113,10 @@ const pairs = {
 
 const views = {
 	home: document.getElementById('view-home'),
-	search: document.getElementById('view-search'),
-	library: document.getElementById('view-library'),
 	album: document.getElementById('view-album'),
 	artist: document.getElementById('view-artist'),
 	playlist: document.getElementById('view-playlist'),
 };
-
-const VIEW_TITLES = { home: 'Home', search: 'Search', library: 'Your Library' };
-
-/** Views the tab bar can open; anything else was reached by tapping a card. */
-const TAB_VIEWS = new Set(['home', 'search', 'library']);
 
 /* ------------------------------------------------------------------ host bridge */
 
@@ -182,6 +170,9 @@ const state = {
 
 	/** a stall has been reported and the host has not answered yet. */
 	recovering: false,
+
+	/** object URL of the local fallback copy currently bound to the audio element, if any. */
+	fallbackBlobUrl: null,
 
 	userPaused: false,
 	lastClock: 0,
@@ -351,6 +342,7 @@ function hideRecovery() {
 function setTrack(track) {
 	if (!track) return;
 	state.track = track;
+	paintBarVisibility();
 	state.duration = track.durationSeconds || state.duration;
 	els.npTitle.textContent = track.title || 'Unknown title';
 	els.npArtist.textContent = track.artist || 'Unknown artist';
@@ -410,6 +402,9 @@ function paintPlayer(track) {
 function applyStream(payload) {
 	if (!payload || !payload.url) return;
 
+	// A fresh source replaces any local fallback copy; free its object URL.
+	if (state.fallbackBlobUrl && state.fallbackBlobUrl !== payload.url) revokeFallbackBlob();
+
 	state.recovering = false;
 	hideRecovery();
 	state.awaitingResume = true;
@@ -428,6 +423,66 @@ function applyStream(payload) {
 
 	els.audio.src = payload.url;
 	els.audio.load();
+}
+
+/**
+ * Self-healing recovery: the host downloaded the track and sent its bytes. Turn them into a
+ * same-origin blob (a file:// path would be blocked from the page's secure origin) and play
+ * it through the exact same seek-and-resume path as a network stream.
+ */
+function applyFallback(payload) {
+	if (!payload || !payload.audioBase64) return;
+
+	revokeFallbackBlob();
+
+	let url;
+	try {
+		url = URL.createObjectURL(base64ToBlob(payload.audioBase64, payload.mime));
+	} catch (error) {
+		console.warn('[player] fallback decode failed', error);
+		failPlayback();
+		return;
+	}
+
+	state.fallbackBlobUrl = url;
+	applyStream({
+		videoId: payload.videoId,
+		url,
+		resumePositionSeconds: payload.resumePositionSeconds,
+		autoResumed: true,
+		track: payload.track,
+	});
+}
+
+function base64ToBlob(base64, mime) {
+	const binary = atob(base64);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	return new Blob([bytes], { type: mime || 'audio/mp4' });
+}
+
+function revokeFallbackBlob() {
+	if (state.fallbackBlobUrl) {
+		URL.revokeObjectURL(state.fallbackBlobUrl);
+		state.fallbackBlobUrl = null;
+	}
+}
+
+/**
+ * Terminal failure: nothing more can be tried for this track, so stop the recovery UI and
+ * tell the listener plainly. Shared by the host's playbackError and a local copy that will
+ * not decode.
+ */
+function failPlayback() {
+	state.recovering = false;
+	state.awaitingResume = false;
+	state.userPaused = true;
+	hideRecovery();
+	paintTransport();
+	showErrorModal(
+		state.track ? state.track.title : 'This track',
+		"We tried several times and couldn't get this playing. It may be private, blocked where you are, or gone.",
+	);
 }
 
 function playFromResumePoint() {
@@ -594,6 +649,7 @@ function openPlayer() {
 	lyricHoldUntil = 0;
 	paintProgress();
 	ensureLyrics(state.track);
+	refreshLyricMode();
 }
 
 function closePlayer() {
@@ -615,9 +671,16 @@ function setLyricsFullscreen(on) {
 		'aria-label',
 		on ? 'Show the cover and controls' : 'Show lyrics full screen');
 
-	// The screen just changed shape under the listener, so put the sung line back in it.
-	const node = lyricNodes[lyricIndex];
-	if (node) scrollLyricLineIntoView(node);
+	// Swap conveyor <-> full column, then only the full column scrolls to the sung line.
+	refreshLyricMode();
+	if (on) {
+		const node = lyricNodes[lyricIndex];
+		if (node) scrollLyricLineIntoView(node);
+	}
+}
+
+function lyricsFull() {
+	return els.playerView.classList.contains('lyrics-full');
 }
 
 function showLyricsInline() {
@@ -631,6 +694,8 @@ function toggleLyricsFullscreen() {
 /* ------------------------------------------------------------------ lyrics */
 
 const LYRIC_HOLD_MS = 4000;
+/** Inline lyrics are a window of this many lines either side of the sung one. */
+const LYRIC_WINDOW_RADIUS = 2;
 let lyricLines = [];
 let lyricNodes = [];
 let lyricIndex = -1;
@@ -696,6 +761,7 @@ async function loadLyrics(track) {
 			els.playerLyrics.append(...lyricNodes);
 			els.playerLyricsSource.textContent = 'LRCLIB · tap a line to jump';
 			lyricVideoId = track.videoId;
+			refreshLyricMode();
 			paintProgress();
 			return;
 		}
@@ -718,6 +784,7 @@ function resetLyrics() {
 	els.playerLyrics.classList.remove('is-synced');
 	els.playerLyrics.classList.remove('showing-note');
 	els.playerLyricsSource.textContent = '';
+	refreshLyricMode();
 }
 
 function lyricsNote(text) {
@@ -765,9 +832,59 @@ function paintLyricClock(position) {
 		node.classList.toggle('on', i === index);
 		node.classList.toggle('past', i < index);
 	});
+	layoutLyricWindow();
 
-	// Scrrolling by hand wins until the listener stops touching the panel.
-	if (index >= 0 && Date.now() > lyricHoldUntil) scrollLyricLineIntoView(lyricNodes[index]);
+	// On Android the inline window recentres by sliding lines, so only the full column
+	// scrolls there; the desktop column always follows the sung line. Scrolling by hand
+	// wins until the listener stops touching the panel.
+	if ((lyricsFull() || !IS_ANDROID) && index >= 0 && Date.now() > lyricHoldUntil) scrollLyricLineIntoView(lyricNodes[index]);
+}
+
+/** Marks the handful of lines the inline window shows around the sung one (Android only). */
+function lyricWindowMode() {
+	return IS_ANDROID && !lyricsFull() && lyricLines.length > 0;
+}
+
+/** Switches between the animated conveyor and the full scrolling column. */
+function refreshLyricMode() {
+	const on = lyricWindowMode();
+	els.playerLyrics.classList.toggle('is-window', on);
+	if (on) {
+		layoutLyricWindow();
+		return;
+	}
+	lyricNodes.forEach((node) => {
+		node.style.transform = '';
+		node.style.opacity = '';
+		node.style.filter = '';
+		node.style.pointerEvents = '';
+	});
+}
+
+/**
+ * Positions the conveyor: the sung line holds the middle and every neighbour sits a
+ * measured line-height away, so a change of index slides the whole stack on a bezier
+ * instead of jumping. Heights are read per node so wrapped lines keep their spacing.
+ */
+function layoutLyricWindow() {
+	if (!els.playerLyrics.classList.contains('is-window')) return;
+	const height = els.playerLyrics.clientHeight;
+	if (!height || !lyricNodes.length) return;
+
+	const heights = lyricNodes.map((node) => node.offsetHeight);
+	const centre = Math.max(lyricIndex, 0);
+	const y = new Array(lyricNodes.length);
+	y[centre] = height / 2 - heights[centre] / 2;
+	for (let i = centre + 1; i < y.length; i++) y[i] = y[i - 1] + heights[i - 1];
+	for (let i = centre - 1; i >= 0; i--) y[i] = y[i + 1] - heights[i];
+
+	lyricNodes.forEach((node, i) => {
+		const d = Math.abs(i - centre);
+		node.style.transform = `translateY(${y[i]}px)`;
+		node.style.opacity = d === 0 ? '1' : d === 1 ? '.5' : d === 2 ? '.26' : '0';
+		node.style.filter = d === 0 ? 'none' : d <= 2 ? 'blur(.6px)' : 'blur(2px)';
+		node.style.pointerEvents = d <= LYRIC_WINDOW_RADIUS ? 'auto' : 'none';
+	});
 }
 
 /**
@@ -809,20 +926,16 @@ function handleHostMessage(raw) {
 			applyStream(payload);
 			break;
 
+		case 'fallbackReady':
+			applyFallback(payload);
+			break;
+
 		case 'retryStarted':
 			showRecovery(payload.attempt > 1 ? 'Still looking…' : 'Looking for another copy…');
 			break;
 
 		case 'playbackError':
-			state.recovering = false;
-			state.awaitingResume = false;
-			state.userPaused = true;
-			hideRecovery();
-			paintTransport();
-			showErrorModal(
-				state.track ? state.track.title : 'This track',
-				"We tried several times and couldn't get this playing. It may be private, blocked where you are, or gone.",
-			);
+			failPlayback();
 			break;
 
 		case 'back':
@@ -857,6 +970,10 @@ function handleBack() {
 			return;
 		}
 		closePlayer();
+		return;
+	}
+	if (!els.searchBlock.hidden) {
+		clearSearch();
 		return;
 	}
 	if (state.history.length) {
@@ -910,20 +1027,6 @@ function cardNode(track, queue, index) {
 	);
 	button.addEventListener('click', () => playTrack(track, queue, index));
 	return button;
-}
-
-function renderGrid(container, tracks, statusNode, emptyLabel) {
-	container.innerHTML = '';
-	if (statusNode) statusNode.textContent = '';
-
-	if (!tracks.length) {
-		if (statusNode) statusNode.textContent = emptyLabel;
-		return;
-	}
-
-	const fragment = document.createDocumentFragment();
-	tracks.forEach((track, index) => fragment.appendChild(cardNode(track, tracks, index)));
-	container.appendChild(fragment);
 }
 
 /**
@@ -985,7 +1088,7 @@ function albumCard(album) {
 	button.appendChild(el('p', 'card-title', album.title || 'Untitled'));
 	button.appendChild(el('p', 'card-sub', joinBits([album.artist || 'Unknown artist', album.year ? String(album.year) : null])));
 	button.appendChild(el('p', 'card-note', album.isSingle ? 'Single' : 'Album'));
-	button.addEventListener('click', () => openAlbum(album.id, album.title));
+	button.addEventListener('click', () => openAlbum(album.id));
 	return button;
 }
 
@@ -995,7 +1098,7 @@ function artistCard(artist) {
 	button.appendChild(coverNode(artist.avatarUrl, 'avatar'));
 	button.appendChild(el('p', 'card-title', artist.name || 'Artist'));
 	button.appendChild(el('p', 'card-sub', joinBits([artist.popularityInfo, artist.subscribersInfo]) || 'Artist'));
-	button.addEventListener('click', () => openArtist(artist.channelId, artist.name, artist.avatarUrl));
+	button.addEventListener('click', () => openArtist(artist.channelId, artist.avatarUrl));
 	return button;
 }
 
@@ -1055,12 +1158,11 @@ async function fetchPage(query) {
  * `home` keeps the old flat grid for the quick-pick chips; the search view gets the full
  * tabbed page instead.
  */
-async function runSearch(query, options) {
-	const opts = options || {};
-	const grid = opts.grid || null;
-	const status = opts.status || els.searchStatus;
+async function runSearch(query) {
+	const status = els.searchStatus;
 	const trimmed = (query || '').trim();
 	if (!trimmed) return;
+	setSearchOpen(true);
 	if (!Bridge.available) {
 		status.textContent = 'Music only plays inside the Sonora app.';
 		return;
@@ -1068,19 +1170,12 @@ async function runSearch(query, options) {
 
 	const token = ++renderToken;
 	status.textContent = `Looking for “${trimmed}”…`;
-	if (grid) grid.innerHTML = '';
-	else els.searchResults.innerHTML = '';
+	els.searchResults.innerHTML = '';
 
 	const page = await fetchPage(trimmed);
 	if (token !== renderToken) return;
 	status.textContent = '';
 
-	if (grid) {
-		renderGrid(grid, page.songs, status, `Nothing found for “${trimmed}”.`);
-		return;
-	}
-
-	els.searchEmpty.hidden = true;
 	els.searchTabs.hidden = false;
 	state.searchPage = page;
 	state.searchTab = 'all';
@@ -1198,23 +1293,11 @@ function renderLibrary() {
 function renderHomeContinue() {
 	const recent = library.slice(0, 5);
 	els.homeContinue.hidden = recent.length === 0;
+	els.homeHint.hidden = recent.length > 0;
 	els.homeContinueGrid.innerHTML = '';
 	const fragment = document.createDocumentFragment();
 	recent.forEach((entry, index) => fragment.appendChild(cardNode(entry, recent, index)));
 	els.homeContinueGrid.appendChild(fragment);
-}
-
-function renderQuickPicks() {
-	els.quickPicks.innerHTML = '';
-	QUICK_PICKS.forEach((pick) => {
-		const chip = el('button', 'chip', pick.label);
-		chip.type = 'button';
-		chip.addEventListener('click', () => {
-			els.scroller.scrollTop = 0;
-			runSearch(pick.query, { grid: els.homeGrid, status: els.homeStatus });
-		});
-		els.quickPicks.appendChild(chip);
-	});
 }
 
 /* ------------------------------------------------------------------ album and artist pages */
@@ -1248,10 +1331,10 @@ function actionRow(tracks) {
 	return row;
 }
 
-async function openAlbum(id, title) {
+async function openAlbum(id) {
 	if (!id) return;
 	const token = ++renderToken;
-	pushView('album', title || 'Album');
+	pushView('album');
 	els.albumHero.innerHTML = '';
 	els.albumTracks.innerHTML = '';
 
@@ -1286,7 +1369,6 @@ function renderAlbum(detail) {
 
 	els.albumHero.innerHTML = '';
 	els.albumTracks.innerHTML = '';
-	els.viewTitle.textContent = album.title || 'Album';
 
 	const hero = el('div', 'hero');
 	hero.appendChild(coverNode(album.coverUrl, 'hero-art'));
@@ -1312,10 +1394,10 @@ function renderAlbum(detail) {
 	tracks.forEach((track, index) => els.albumTracks.appendChild(songRow(track, tracks, index, true)));
 }
 
-async function openArtist(channelId, name, avatarUrl) {
+async function openArtist(channelId, avatarUrl) {
 	if (!channelId) return;
 	const token = ++renderToken;
-	pushView('artist', name || 'Artist');
+	pushView('artist');
 	els.artistHero.innerHTML = '';
 	els.artistBody.innerHTML = '';
 
@@ -1350,7 +1432,6 @@ function renderArtist(detail) {
 
 	els.artistHero.innerHTML = '';
 	els.artistBody.innerHTML = '';
-	els.viewTitle.textContent = artist.name || 'Artist';
 
 	const hero = el('div', 'artist-banner');
 	if (artist.bannerUrl) {
@@ -1380,6 +1461,11 @@ function renderArtist(detail) {
 		shelf('Singles and EPs', (detail.singles || []).map(albumCard), GRID_CARDS),
 		shelf('Fans also like', (detail.related || []).map(artistCard), GRID_ARTISTS),
 	]);
+}
+
+/** The bar only exists once there is something on it; an idle app is just a page. */
+function paintBarVisibility() {
+	els.playerBar.hidden = !state.track;
 }
 
 function paintTransport() {
@@ -1437,37 +1523,39 @@ function paintVolume() {
 	pairs.muteIcon.forEach((button) => { setIcon(button.querySelector('[data-icon]'), icon); });
 }
 
-function showView(name, title) {
+function showView(name) {
 	state.view = name;
 	Object.entries(views).forEach(([key, node]) => { node.hidden = key !== name; });
-	els.viewTitle.textContent = title || VIEW_TITLES[name] || 'Sonora';
 	els.btnBack.hidden = state.history.length === 0;
-	document.querySelectorAll('[data-nav]').forEach((button) => {
-		button.classList.toggle('nav-active', TAB_VIEWS.has(name) && button.dataset.nav === name);
-	});
 	els.scroller.scrollTop = 0;
 }
 
-/** Tab navigation always starts a fresh page, so it clears where you came from. */
-function navigateTo(name) {
-	state.history = [];
+/** Opening an album, artist or playlist remembers the page behind it. */
+function pushView(name) {
+	state.history.push(state.view);
 	showView(name);
-	if (name === 'search' && window.matchMedia('(min-width: 768px)').matches) els.searchInput.focus();
-}
-
-/** Opening an album or an artist remembers the page behind it. */
-function pushView(name, title) {
-	state.history.push({ view: state.view, title: els.viewTitle.textContent });
-	showView(name, title);
 }
 
 function goBack() {
 	const previous = state.history.pop();
-	if (!previous) {
-		showView('home');
-		return;
-	}
-	showView(previous.view, previous.title);
+	showView(previous || 'home');
+}
+
+/** The search results swap in above the library only while a query is live. */
+function setSearchOpen(on) {
+	els.searchBlock.hidden = !on;
+	els.homeBlock.hidden = on;
+}
+
+function clearSearch() {
+	clearTimeout(state.searchTimer);
+	++renderToken;
+	state.searchPage = null;
+	els.searchInput.value = '';
+	els.searchResults.innerHTML = '';
+	els.searchStatus.textContent = '';
+	els.searchTabs.hidden = true;
+	setSearchOpen(false);
 }
 
 /* ------------------------------------------------------------------ library bookkeeping */
@@ -1584,7 +1672,7 @@ function openPlaylist(id) {
 	const list = findPlaylist(id);
 	if (!list) return;
 	state.openPlaylistId = id;
-	pushView('playlist', list.name);
+	pushView('playlist');
 	renderPlaylist(list);
 }
 
@@ -1603,7 +1691,6 @@ function playlistNameInput(list) {
 		}
 		list.name = next;
 		savePlaylists();
-		els.viewTitle.textContent = next;
 		renderLibraryPlaylists();
 		toast('Playlist renamed', 'info');
 	});
@@ -1825,10 +1912,6 @@ function wireControls() {
 		[els.playerLyrics, els.playerInner].forEach((node) => node.addEventListener(type, holdLyrics, { passive: true }));
 	});
 
-	document.querySelectorAll('[data-nav]').forEach((button) => {
-		button.addEventListener('click', () => navigateTo(button.dataset.nav));
-	});
-
 	els.btnBack.addEventListener('click', goBack);
 
 	els.searchTabs.querySelectorAll('.search-tab').forEach((button) => {
@@ -1843,12 +1926,7 @@ function wireControls() {
 		clearTimeout(state.searchTimer);
 		const value = els.searchInput.value;
 		if (!value.trim()) {
-			++renderToken;
-			state.searchPage = null;
-			els.searchResults.innerHTML = '';
-			els.searchStatus.textContent = '';
-			els.searchTabs.hidden = true;
-			els.searchEmpty.hidden = false;
+			clearSearch();
 			return;
 		}
 		state.searchTimer = setTimeout(() => runSearch(value), SEARCH_DEBOUNCE_MS);
@@ -1858,6 +1936,9 @@ function wireControls() {
 			event.preventDefault();
 			clearTimeout(state.searchTimer);
 			runSearch(els.searchInput.value);
+		} else if (event.key === 'Escape') {
+			clearSearch();
+			els.searchInput.blur();
 		}
 	});
 
@@ -1985,11 +2066,11 @@ function init() {
 	els.audio.volume = settings.muted ? 0 : settings.volume;
 
 	greet();
-	renderQuickPicks();
 	renderLibrary();
 	renderLibraryPlaylists();
 	renderHomeContinue();
-	navigateTo('home');
+	showView('home');
+	paintBarVisibility();
 	paintTransport();
 	paintVolume();
 	wireAudioElement();
@@ -1997,6 +2078,7 @@ function init() {
 	wireMediaSession();
 	startHeartbeat();
 
+	window.addEventListener('resize', layoutLyricWindow);
 	window.addEventListener('HybridWebViewMessageReceived', (event) => {
 		handleHostMessage(event.detail.message);
 	});

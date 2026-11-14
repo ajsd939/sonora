@@ -9,6 +9,7 @@ namespace Sonora.Models;
 public static class HostMessageType
 {
 	public const string StreamReady = "streamReady";
+	public const string FallbackReady = "fallbackReady";
 	public const string RetryStarted = "retryStarted";
 	public const string PlaybackError = "playbackError";
 }
@@ -89,6 +90,31 @@ public sealed class StreamReadyPayload
 	/// <summary>False for a user-initiated play, true when this URL replaced a dropped stream.</summary>
 	[JsonPropertyName("autoResumed")]
 	public bool AutoResumed { get; init; }
+
+	[JsonPropertyName("track")]
+	public TrackDto? Track { get; init; }
+}
+
+/// <summary>
+/// Self-healing recovery: the host downloaded the audio once and hands the page a local copy,
+/// either to replace a stream that dropped mid-song or as a last resort when a fresh play
+/// could not be resolved. The bytes travel as base64 because the page cannot read a
+/// <c>file://</c> path from its secure origin; the player turns them into a same-origin blob
+/// and resumes from <see cref="ResumePositionSeconds"/>.
+/// </summary>
+public sealed class FallbackReadyPayload
+{
+	[JsonPropertyName("videoId")]
+	public required string VideoId { get; init; }
+
+	[JsonPropertyName("audioBase64")]
+	public required string AudioBase64 { get; init; }
+
+	[JsonPropertyName("mime")]
+	public required string Mime { get; init; }
+
+	[JsonPropertyName("resumePositionSeconds")]
+	public double ResumePositionSeconds { get; init; }
 
 	[JsonPropertyName("track")]
 	public TrackDto? Track { get; init; }

@@ -31,6 +31,7 @@ public sealed class PlaybackSupervisor : IDisposable
 	private readonly StrictAudioStreamResolver _resolver;
 	private readonly TrackSearchService _search;
 	private readonly IStreamBridge _bridge;
+	private readonly FallbackAudioCache _fallback;
 	private readonly Lock _gate = new();
 	private readonly Timer _watchdog;
 
@@ -47,11 +48,13 @@ public sealed class PlaybackSupervisor : IDisposable
 	public PlaybackSupervisor(
 		StrictAudioStreamResolver resolver,
 		TrackSearchService search,
-		IStreamBridge bridge)
+		IStreamBridge bridge,
+		FallbackAudioCache fallback)
 	{
 		_resolver = resolver;
 		_search = search;
 		_bridge = bridge;
+		_fallback = fallback;
 
 		_resolver.RetryScheduled += payload => _bridge.Send(HostMessageType.RetryStarted, payload);
 		_watchdog = new Timer(_ => EvaluateClock(), null, WatchdogInterval, WatchdogInterval);
@@ -114,6 +117,9 @@ public sealed class PlaybackSupervisor : IDisposable
 			_watchdogSuspendedUntilUtc = DateTimeOffset.UtcNow + ResumeSettleWindow;
 		}
 
+		// The listener moved on: the previous track's local fallback copy is no longer needed.
+		_fallback.Clear();
+
 #if ANDROID
 		// Claiming the playback slot here is what lets the sound outlast the screen.
 		Platforms.Android.PlaybackService.Begin(
@@ -148,6 +154,8 @@ public sealed class PlaybackSupervisor : IDisposable
 				_lastAdvancedUtc = DateTimeOffset.UtcNow;
 			}
 		}
+
+		NotifyServicePlaying(report.IsPlaying);
 	}
 
 	/// <summary>Explicit failure reported by the player: an audio error or its own stall timer.</summary>
@@ -189,6 +197,22 @@ public sealed class PlaybackSupervisor : IDisposable
 		{
 			_isPlaying = false;
 		}
+
+		NotifyServicePlaying(false);
+	}
+
+	/// <summary>Deletes the local fallback copy, if any. Used when the app closes.</summary>
+	public void ClearFallback() => _fallback.Clear();
+
+	/// <summary>
+	/// Mirrors the play/pause state into the Android notification and its wake locks.
+	/// A no-op on every other platform and whenever the state has not actually changed.
+	/// </summary>
+	private static void NotifyServicePlaying(bool playing)
+	{
+#if ANDROID
+		Platforms.Android.PlaybackService.NotifyPlaying(global::Android.App.Application.Context, playing);
+#endif
 	}
 
 	public void Dispose()
@@ -200,6 +224,8 @@ public sealed class PlaybackSupervisor : IDisposable
 			_session?.Dispose();
 			_session = null;
 		}
+
+		_fallback.Clear();
 	}
 
 	private void EvaluateClock()
@@ -257,6 +283,15 @@ public sealed class PlaybackSupervisor : IDisposable
 
 		try
 		{
+			// A stream that stopped mid-song is replaced with a stable local copy first;
+			// only if that download fails do we fall back to re-resolving another URL.
+			if (autoResumed && await TryFallbackAsync(videoRef, resumeSeconds, track, cancellationToken).ConfigureAwait(false))
+			{
+				return;
+			}
+
+			cancellationToken.ThrowIfCancellationRequested();
+
 			var result = await _resolver
 				.ResolveAsync(videoRef, TimeSpan.FromSeconds(resumeSeconds), stallReason, cancellationToken)
 				.ConfigureAwait(false);
@@ -277,6 +312,8 @@ public sealed class PlaybackSupervisor : IDisposable
 					_watchdogSuspendedUntilUtc = DateTimeOffset.UtcNow + ResumeSettleWindow;
 				}
 
+				NotifyServicePlaying(true);
+
 				_bridge.Send(HostMessageType.StreamReady, new StreamReadyPayload
 				{
 					VideoId = YouTubeRefs.ToKey(videoRef),
@@ -290,11 +327,24 @@ public sealed class PlaybackSupervisor : IDisposable
 				return;
 			}
 
+			// A fresh play that could not be resolved gets one last resort: a local download.
+			// A mid-song drop already tried the download before re-resolving, so skip it here.
+			if (!autoResumed && await TryFallbackAsync(videoRef, result.ResumePosition.TotalSeconds, track, cancellationToken).ConfigureAwait(false))
+			{
+				return;
+			}
+
+			// The listener may have skipped during the download; a stale error would pause
+			// the new track, so let the cancellation unwind instead of reporting failure.
+			cancellationToken.ThrowIfCancellationRequested();
+
 			lock (_gate)
 			{
 				_recovering = false;
 				_isPlaying = false;
 			}
+
+			NotifyServicePlaying(false);
 
 			_bridge.Send(HostMessageType.PlaybackError, new PlaybackErrorPayload
 			{
@@ -316,6 +366,8 @@ public sealed class PlaybackSupervisor : IDisposable
 				_isPlaying = false;
 			}
 
+			NotifyServicePlaying(false);
+
 			_bridge.Send(HostMessageType.PlaybackError, new PlaybackErrorPayload
 			{
 				VideoId = YouTubeRefs.ToKey(videoRef),
@@ -323,6 +375,60 @@ public sealed class PlaybackSupervisor : IDisposable
 				Reason = FailureSummary.Of(exception),
 				ResumePositionSeconds = resumeSeconds,
 			});
+		}
+	}
+
+	/// <summary>
+	/// Downloads the track once and hands the page a local copy. Returns false when the
+	/// download or read fails, so the caller can fall through to re-resolving (mid-song) or
+	/// the terminal error (fresh play). The recovery flag stays set throughout, which keeps
+	/// the watchdog from starting a second competing cycle while the download is in flight.
+	/// </summary>
+	private async Task<bool> TryFallbackAsync(string videoRef, double resumeSeconds, TrackDto? track, CancellationToken cancellationToken)
+	{
+		try
+		{
+			var path = await _fallback.DownloadFallbackAudioAsync(videoRef, cancellationToken).ConfigureAwait(false);
+			if (path is null || cancellationToken.IsCancellationRequested)
+			{
+				return false;
+			}
+
+			var audio = await _fallback.LoadAsync(path, cancellationToken).ConfigureAwait(false);
+			if (audio is null || cancellationToken.IsCancellationRequested)
+			{
+				return false;
+			}
+
+			lock (_gate)
+			{
+				_recovering = false;
+				_isPlaying = true;
+				_lastAdvancedUtc = DateTimeOffset.UtcNow;
+				_lastAdvancedPositionSeconds = resumeSeconds;
+				_watchdogSuspendedUntilUtc = DateTimeOffset.UtcNow + ResumeSettleWindow;
+			}
+
+			NotifyServicePlaying(true);
+
+			_bridge.Send(HostMessageType.FallbackReady, new FallbackReadyPayload
+			{
+				VideoId = YouTubeRefs.ToKey(videoRef),
+				AudioBase64 = audio.Base64,
+				Mime = audio.Mime,
+				ResumePositionSeconds = resumeSeconds,
+				Track = track,
+			});
+			return true;
+		}
+		catch (OperationCanceledException)
+		{
+			return false;
+		}
+		catch (Exception exception)
+		{
+			System.Diagnostics.Debug.WriteLine($"[sonora] fallback recovery failed: {FailureSummary.Of(exception)}");
+			return false;
 		}
 	}
 

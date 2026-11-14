@@ -139,60 +139,40 @@ input:focus-visible,
 		var(--bg);
 }
 
-.sidebar {
-	border-radius: var(--r-lg);
-	background: rgba(255, 255, 255, .03);
-	border: 1px solid var(--line);
-}
-
 .brand-mark {
-	display: grid;
-	place-items: center;
+	flex: 0 0 auto;
 	width: 34px;
 	height: 34px;
 	border-radius: 11px;
-	background: linear-gradient(150deg, #fff, #d8d8de);
-	color: #111;
+	overflow: hidden;
 	box-shadow: 0 6px 16px rgba(0, 0, 0, .35);
 }
 
+.brand-img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
 .brand-name {
+	display: flex;
+	align-items: center;
+	gap: 7px;
 	font-size: 17px;
 	font-weight: 700;
 	letter-spacing: -0.03em;
 }
 
-.brand-sub {
-	font-size: 11px;
+/* Telling the listener the app is unfinished is better than a release notes page nobody opens. */
+.brand-beta {
+	padding: 2px 6px;
+	border-radius: 999px;
+	background: var(--surface-2);
 	color: var(--text-3);
-	letter-spacing: 0;
-}
-
-.nav-item {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	width: 100%;
-	padding: 10px 12px;
-	border-radius: var(--r-md);
-	font-size: 14px;
-	font-weight: 600;
-	color: var(--text-2);
-	transition: color .18s var(--ease), background .18s var(--ease), transform .12s var(--ease);
-}
-
-.nav-item:hover {
-	color: var(--text);
-	background: rgba(255, 255, 255, .05);
-}
-
-.nav-item:active {
-	transform: scale(.98);
-}
-
-.nav-active {
-	color: var(--text);
-	background: rgba(255, 255, 255, .1);
+	font-size: 9.5px;
+	font-weight: 700;
+	letter-spacing: .07em;
+	text-transform: uppercase;
 }
 
 .main-pane {
@@ -209,12 +189,6 @@ input:focus-visible,
 	z-index: 5;
 	backdrop-filter: blur(20px) saturate(160%);
 	background: linear-gradient(180deg, rgba(23, 23, 27, .92), rgba(23, 23, 27, .55));
-}
-
-.pane-title {
-	font-size: 21px;
-	font-weight: 700;
-	letter-spacing: -0.03em;
 }
 
 .icon-round {
@@ -551,6 +525,35 @@ input:focus-visible,
 	transform: none;
 }
 
+@media (max-width: 639px) {
+	.row {
+		gap: 10px;
+		padding: 9px 8px;
+	}
+
+	/* The stream count is decoration; on a phone the title is the content. */
+	.row-note {
+		display: none;
+	}
+
+	.row-time {
+		width: 38px;
+	}
+
+	.pane-head {
+		gap: 10px;
+		padding: 12px 14px 10px;
+	}
+
+	.pane-head .searchbar {
+		max-width: none;
+	}
+
+	.search-go {
+		display: none;
+	}
+}
+
 /* ------------------------------------------------------------------ heroes */
 
 .hero {
@@ -651,26 +654,7 @@ input:focus-visible,
 	background: rgba(255, 255, 255, .09);
 }
 
-/* ------------------------------------------------------------------ buttons & chips */
-
-.chip {
-	padding: 9px 16px;
-	border-radius: 999px;
-	font-size: 13px;
-	font-weight: 600;
-	color: var(--text);
-	background: rgba(255, 255, 255, .07);
-	border: 1px solid var(--line);
-	transition: background .2s var(--ease), transform .12s var(--ease);
-}
-
-.chip:hover {
-	background: rgba(255, 255, 255, .14);
-}
-
-.chip:active {
-	transform: scale(.97);
-}
+/* ------------------------------------------------------------------ buttons */
 
 .btn-text {
 	padding: 8px 14px;
@@ -751,6 +735,8 @@ input:focus-visible,
 	transition: height .15s var(--ease);
 }
 
+/* No visible thumb anywhere — the track alone shows progress, and the invisible
+   thumb keeps its hit area so scrubbing still works on touch and mouse. */
 .slider::-webkit-slider-thumb {
 	-webkit-appearance: none;
 	appearance: none;
@@ -759,19 +745,13 @@ input:focus-visible,
 	margin-top: -4px;
 	border: 0;
 	border-radius: 50%;
-	background: #fff;
+	background: transparent;
 	opacity: 0;
-	transition: opacity 0.15s ease;
 }
 
 .slider:hover::-webkit-slider-runnable-track,
 .slider:focus-visible::-webkit-slider-runnable-track {
 	background: linear-gradient(to right, var(--accent) 0 var(--pct), rgba(255, 255, 255, .22) var(--pct) 100%);
-}
-
-.slider:hover::-webkit-slider-thumb,
-.slider:focus-visible::-webkit-slider-thumb {
-	opacity: 1;
 }
 
 .slider::-moz-range-track {
@@ -791,7 +771,8 @@ input:focus-visible,
 	height: 12px;
 	border: 0;
 	border-radius: 50%;
-	background: #fff;
+	background: transparent;
+	opacity: 0;
 }
 
 .slider:hover::-moz-range-progress {
@@ -1135,6 +1116,24 @@ input:focus-visible,
 	min-width: 0;
 }
 
+/* Full-screen words: at any width the cover steps aside and the column scrolls. */
+.player.lyrics-full .player-left {
+	display: none;
+}
+
+.player.lyrics-full .lyrics-pane {
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+.player.lyrics-full .lyrics {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	padding-bottom: 45vh;
+	-webkit-mask-image: linear-gradient(180deg, transparent, #000 14%, #000 86%, transparent);
+	mask-image: linear-gradient(180deg, transparent, #000 14%, #000 86%, transparent);
+}
+
 /* ------------------------------------------------------------------ player on a phone */
 
 /*
@@ -1172,29 +1171,45 @@ input:focus-visible,
 	.player.lyrics-full .player-inner {
 		overflow-y: hidden;
 	}
+}
 
-	.player.lyrics-full .player-left {
-		display: none;
-	}
+/* ------------------------------------------------------------------ lyrics window */
 
-	.player.lyrics-full .lyrics-pane {
-		flex: 1 1 auto;
-		min-height: 0;
-	}
+/*
+ * Android only: unless the words own the screen they are a conveyor — the sung line holds
+ * the middle while neighbours slide away and arrive on a bezier, like a now-playing card.
+ * The .is-window class is only ever added on Android, so the desktop shell keeps the plain
+ * scrolling column.
+ */
+.player:not(.lyrics-full) .lyrics.is-synced.is-window {
+	display: block;
+	position: relative;
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: hidden;
+	padding: 0;
+	scroll-behavior: auto;
+	-webkit-mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
+	mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
+}
 
-	.player.lyrics-full .lyrics {
-		flex: 1 1 auto;
-		overflow-y: auto;
-		padding-bottom: 45vh;
-		-webkit-mask-image: linear-gradient(180deg, transparent, #000 14%, #000 86%, transparent);
-		mask-image: linear-gradient(180deg, transparent, #000 14%, #000 86%, transparent);
+@media (max-width: 899px) {
+	.player:not(.lyrics-full) .lyrics.is-synced.is-window {
+		flex: 0 0 auto;
+		height: 236px;
 	}
 }
 
-@media (min-width: 900px) {
-	.lyrics-full-toggle {
-		display: none;
-	}
+.lyrics.is-window .lyric {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 0;
+	transition:
+		transform .65s cubic-bezier(.22, .61, .36, 1),
+		opacity .45s cubic-bezier(.22, .61, .36, 1),
+		filter .45s cubic-bezier(.22, .61, .36, 1);
+	will-change: transform, opacity;
 }
 
 /* ------------------------------------------------------------------ toasts & modal */
@@ -1261,36 +1276,6 @@ input:focus-visible,
 	padding: 8px 8px 0;
 }
 
-.sidebar {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	width: 248px;
-	flex: 0 0 auto;
-	padding: 8px;
-}
-
-.brand {
-	display: flex;
-	align-items: center;
-	gap: 11px;
-	padding: 12px 10px;
-}
-
-.brand-text {
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-}
-
-.nav {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	min-height: 0;
-	flex: 1 1 auto;
-}
-
 .main-pane {
 	display: flex;
 	flex-direction: column;
@@ -1306,12 +1291,15 @@ input:focus-visible,
 	padding: 14px 18px 10px;
 }
 
-.pane-head .pane-title {
+.pane-head .brand-name {
+	flex: 0 0 auto;
+}
+
+.pane-head .searchbar {
 	flex: 1 1 auto;
 	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	max-width: 640px;
+	margin-left: auto;
 }
 
 .scroller {
@@ -1321,48 +1309,24 @@ input:focus-visible,
 	padding: 4px 18px 28px;
 }
 
-.tabbar {
-	display: flex;
-	gap: 4px;
-	padding: 6px 8px 0;
-}
-
-.tabbar-item {
-	flex: 1 1 auto;
-	flex-direction: column;
-	gap: 3px;
-	justify-content: center;
-	padding: 8px 4px;
-	font-size: 10.5px;
-	text-align: center;
-}
-
-.chips {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
-	margin-top: 12px;
-}
-
 .greeting {
-	margin-top: 6px;
-	font-size: 13px;
-	color: var(--text-2);
+	margin-top: 8px;
+	font-size: 21px;
+	font-weight: 700;
+	letter-spacing: -0.03em;
+	color: var(--text);
+}
+
+.library-block {
+	margin-top: 28px;
+	padding-top: 10px;
+	border-top: 1px solid var(--line);
 }
 
 .status-line {
 	margin-top: 20px;
 	font-size: 13px;
 	color: var(--text-2);
-}
-
-.search-wrap {
-	position: sticky;
-	top: 0;
-	z-index: 5;
-	padding: 6px 0 12px;
-	background: linear-gradient(180deg, rgba(23, 23, 27, .96), rgba(23, 23, 27, .6));
-	backdrop-filter: blur(20px) saturate(160%);
 }
 
 .library-head {
@@ -1492,18 +1456,9 @@ input:focus-visible,
 	display: none;
 }
 
-.only-mobile {
-	display: flex;
-}
-
 @media (min-width: 768px) {
-
 	.only-desktop {
 		display: flex;
-	}
-
-	.only-mobile {
-		display: none;
 	}
 }
 

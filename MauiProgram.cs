@@ -2,6 +2,9 @@ using Microsoft.Extensions.DependencyInjection;
 #if ANDROID
 using Microsoft.Maui.Handlers;
 #endif
+#if WINDOWS
+using Microsoft.Maui.Handlers;
+#endif
 using Sonora.Services;
 using YoutubeExplode;
 using YouTubeMusicAPI.Client;
@@ -33,6 +36,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<MusicCatalogService>();
 		builder.Services.AddSingleton<LrcLibService>();
 		builder.Services.AddSingleton<StrictAudioStreamResolver>();
+		builder.Services.AddSingleton<FallbackAudioCache>();
 		builder.Services.AddSingleton<HybridWebViewBridge>();
 
 		// The engine depends on the abstraction, the page depends on the concrete
@@ -55,6 +59,26 @@ public static class MauiProgram
 		HybridWebViewHandler.Mapper.AppendToMapping(
 			"sonoraMediaPlayback",
 			(handler, view) => handler.PlatformView.Settings.MediaPlaybackRequiresUserGesture = false);
+#endif
+
+#if WINDOWS
+		// WinUI's unpackaged title bar starts blank: no icon until the AppWindow is given
+		// one. The window handle only exists once the window first activates.
+		WindowHandler.Mapper.AppendToMapping("sonoraWindowChrome", (handler, window) =>
+		{
+			if (handler.PlatformView is not Microsoft.UI.Xaml.Window platformWindow)
+			{
+				return;
+			}
+
+			void OnActivated(object sender, Microsoft.UI.Xaml.WindowActivatedEventArgs args)
+			{
+				platformWindow.Activated -= OnActivated;
+				platformWindow.AppWindow?.SetIcon(Path.Combine(AppContext.BaseDirectory, "appicon.ico"));
+			}
+
+			platformWindow.Activated += OnActivated;
+		});
 #endif
 
 		return builder.Build();

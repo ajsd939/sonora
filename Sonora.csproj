@@ -11,6 +11,7 @@
 
 		<ApplicationTitle>Sonora</ApplicationTitle>
 		<ApplicationId>in.sonora.app</ApplicationId>
+		<ApplicationIcon>Resources\AppIcon\appicon.ico</ApplicationIcon>
 
 		<!--
 			Beta: the numbers stay below 1.0 until the library, playlists and background
@@ -47,6 +48,8 @@
 			prefix so the HybridWebView root resolves as wwwroot/index.html.
 		-->
 		<MauiAsset Include="Resources\Raw\**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
+		<!-- Also on disk beside the exe: the Windows title bar icon is set from a file path. -->
+		<MauiAsset Include="Resources\AppIcon\appicon.ico" LogicalName="appicon.ico" />
 	</ItemGroup>
 
 </Project>
