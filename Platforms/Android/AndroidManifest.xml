@@ -14,6 +14,15 @@
 	<!-- The wake and Wi-Fi locks the service holds so the stream survives the screen off. -->
 	<uses-permission android:name="android.permission.WAKE_LOCK" />
 
+	<!--
+		Listing the listener's own files. From Android 13 audio has a permission of its own;
+		the broad storage one only applies to the older releases the app still supports.
+	-->
+	<uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+	<uses-permission
+		android:name="android.permission.READ_EXTERNAL_STORAGE"
+		android:maxSdkVersion="32" />
+
 	<application
 		android:label="Sonora"
 		android:icon="@mipmap/ic_launcher"

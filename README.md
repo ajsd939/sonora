@@ -15,6 +15,8 @@ a key or a file happens on the C# side behind a small message bridge.
 - **Streams** — resolved with YoutubeExplode and re-resolved on failure, resuming at the
   exact second the sound stopped.
 - **Lyrics** — time-coded from LRCLIB, following the sung line.
+- **Own files** — the music already on the device is listed under *On this device* and plays
+  straight from the file, so a saved track of your own still works with no network.
 - **Android** — a foreground service keeps audio alive off screen, and the Back button
   unwinds the page instead of leaving it.
 
@@ -23,7 +25,7 @@ a key or a file happens on the C# side behind a small message bridge.
 | Path | What lives there |
 | --- | --- |
 | `Resources/Raw/wwwroot` | the interface: `index.html`, `app.css`, `app.js` |
-| `Services` | catalogue lookup, stream resolution, playback supervision, lyrics |
+| `Services` | catalogue lookup, stream resolution, playback supervision, lyrics, the device's own music |
 | `WebViewInterop.cs` | both halves of the bridge between page and host |
 | `Platforms/Android` | manifest, activity, playback service |
 | `tools` | development helpers, including a Chrome DevTools probe for the live page |

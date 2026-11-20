@@ -9,7 +9,7 @@ namespace Sonora.Models;
 public static class HostMessageType
 {
 	public const string StreamReady = "streamReady";
-	public const string FallbackReady = "fallbackReady";
+	public const string AudioBytes = "audioBytes";
 	public const string RetryStarted = "retryStarted";
 	public const string PlaybackError = "playbackError";
 }
@@ -30,7 +30,10 @@ public sealed class HostEnvelope
 
 public sealed class TrackDto
 {
-	/// <summary>11-character YouTube id, or the full watch URL when it cannot be derived.</summary>
+	/// <summary>
+	/// 11-character YouTube id, the full watch URL when it cannot be derived, or a
+	/// <c>local:</c> ref for a file on the device. See <see cref="Services.TrackRefs"/>.
+	/// </summary>
 	[JsonPropertyName("videoId")]
 	public required string VideoId { get; init; }
 
@@ -96,13 +99,14 @@ public sealed class StreamReadyPayload
 }
 
 /// <summary>
-/// Self-healing recovery: the host downloaded the audio once and hands the page a local copy,
-/// either to replace a stream that dropped mid-song or as a last resort when a fresh play
-/// could not be resolved. The bytes travel as base64 because the page cannot read a
-/// <c>file://</c> path from its secure origin; the player turns them into a same-origin blob
+/// Audio the host already has in hand, delivered as bytes instead of a URL. Used twice over:
+/// by self-healing recovery, when the downloaded copy replaces a stream that dropped mid-song
+/// or rescues a fresh play that could not be resolved, and by a file that lives on the device,
+/// which has no URL to hand out at all. The bytes travel as base64 because the page cannot read
+/// a <c>file://</c> path from its secure origin; the player turns them into a same-origin blob
 /// and resumes from <see cref="ResumePositionSeconds"/>.
 /// </summary>
-public sealed class FallbackReadyPayload
+public sealed class AudioBytesPayload
 {
 	[JsonPropertyName("videoId")]
 	public required string VideoId { get; init; }
@@ -115,6 +119,10 @@ public sealed class FallbackReadyPayload
 
 	[JsonPropertyName("resumePositionSeconds")]
 	public double ResumePositionSeconds { get; init; }
+
+	/// <summary>True when these bytes replace sound that had already started, so the player can say so.</summary>
+	[JsonPropertyName("autoResumed")]
+	public bool AutoResumed { get; init; }
 
 	[JsonPropertyName("track")]
 	public TrackDto? Track { get; init; }

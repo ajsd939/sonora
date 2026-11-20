@@ -102,3 +102,17 @@ public sealed class AlbumDetailDto
 	[JsonPropertyName("tracks")]
 	public TrackDto[] Tracks { get; init; } = [];
 }
+
+/// <summary>
+/// The device's own music, as the page sees it. An empty shelf and a refused one look nothing
+/// alike to the listener, so the answer carries which of the two it is.
+/// </summary>
+public sealed class LocalShelfDto
+{
+	/// <summary>False when the listener turned down access, which the page has to say plainly.</summary>
+	[JsonPropertyName("allowed")]
+	public required bool Allowed { get; init; }
+
+	[JsonPropertyName("tracks")]
+	public TrackDto[] Tracks { get; init; } = [];
+}

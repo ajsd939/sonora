@@ -84,6 +84,12 @@
 								<span data-icon="library" class="ic-xl"></span>
 								<p class="empty-text">Nothing saved yet — press play on anything.</p>
 							</div>
+
+							<div class="library-head">
+								<h2 class="shelf-h">On this device</h2>
+								<button id="deviceOpen" class="btn-text">Find my music</button>
+							</div>
+							<p class="library-note">Songs you keep on this device, played from the file itself.</p>
 						</div>
 					</section>
 
@@ -103,6 +109,12 @@
 					<section id="view-playlist" hidden>
 						<div id="playlistHero"></div>
 						<div id="playlistTracks" class="rows"></div>
+					</section>
+
+					<!-- MUSIC ON THIS DEVICE -->
+					<section id="view-device" hidden>
+						<div id="deviceHero"></div>
+						<div id="deviceTracks" class="rows"></div>
 					</section>
 				</div>
 			</main>

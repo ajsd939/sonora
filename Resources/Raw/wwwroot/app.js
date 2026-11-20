@@ -22,6 +22,9 @@ const LIBRARY_KEY = 'sonora.library.v1';
 const PLAYLISTS_KEY = 'sonora.playlists.v1';
 const SETTINGS_KEY = 'sonora.settings.v1';
 
+/** The host marks a file that lives on the device with this ref prefix; see Services/TrackRefs.cs. */
+const LOCAL_REF = 'local:';
+
 /**
  * The conveyor lyric window is an Android affordance. The desktop shell keeps the full
  * scrolling column, so every window behaviour below is gated on this flag.
@@ -85,6 +88,7 @@ const els = {};
 	'albumHero', 'albumTracks', 'artistHero', 'artistBody', 'btnBack',
 	'libraryList', 'libraryEmpty', 'libraryClear', 'scroller', 'playerBar',
 	'libraryPlaylistGrid', 'libraryPlaylistNote', 'playlistNew',
+	'deviceOpen', 'deviceHero', 'deviceTracks',
 	'playlistHero', 'playlistTracks',
 	'playlistModal', 'playlistPickerSong', 'playlistPickerList', 'playlistNameInput',
 	'playlistCreate', 'playlistPickerDismiss',
@@ -116,6 +120,7 @@ const views = {
 	album: document.getElementById('view-album'),
 	artist: document.getElementById('view-artist'),
 	playlist: document.getElementById('view-playlist'),
+	device: document.getElementById('view-device'),
 };
 
 /* ------------------------------------------------------------------ host bridge */
@@ -146,6 +151,7 @@ const Bridge = {
 	openArtist(channelId, avatarUrl) { return this.invoke('OpenArtist', [channelId, avatarUrl]); },
 	openAlbum(id) { return this.invoke('OpenAlbum', [id]); },
 	play(videoRef) { return this.invoke('Play', [videoRef]); },
+	localTracks() { return this.invoke('LocalTracks', []); },
 	lyrics(artist, title, album, durationSeconds) { return this.invoke('Lyrics', [artist, title, album ?? null, durationSeconds ?? 0]); },
 	reportPosition(report) { this.fire('ReportPosition', [report]); },
 	reportStall(report) { this.fire('ReportStall', [report]); },
@@ -171,8 +177,8 @@ const state = {
 	/** a stall has been reported and the host has not answered yet. */
 	recovering: false,
 
-	/** object URL of the local fallback copy currently bound to the audio element, if any. */
-	fallbackBlobUrl: null,
+	/** object URL of the audio the host handed over as bytes, while it is bound to the element. */
+	audioBlobUrl: null,
 
 	userPaused: false,
 	lastClock: 0,
@@ -190,6 +196,9 @@ const state = {
 
 	/** the own-playlist page currently on screen. */
 	openPlaylistId: null,
+
+	/** the last answer from the device's own music, kept until the listener looks again. */
+	deviceShelf: null,
 
 	/** the song the plus was pressed on, while the picker sheet is open. */
 	pickerTrack: null,
@@ -402,8 +411,8 @@ function paintPlayer(track) {
 function applyStream(payload) {
 	if (!payload || !payload.url) return;
 
-	// A fresh source replaces any local fallback copy; free its object URL.
-	if (state.fallbackBlobUrl && state.fallbackBlobUrl !== payload.url) revokeFallbackBlob();
+	// A fresh source replaces audio the host handed over as bytes; free its object URL.
+	if (state.audioBlobUrl && state.audioBlobUrl !== payload.url) revokeAudioBlob();
 
 	state.recovering = false;
 	hideRecovery();
@@ -426,30 +435,31 @@ function applyStream(payload) {
 }
 
 /**
- * Self-healing recovery: the host downloaded the track and sent its bytes. Turn them into a
- * same-origin blob (a file:// path would be blocked from the page's secure origin) and play
- * it through the exact same seek-and-resume path as a network stream.
+ * Audio the host holds rather than links to: a recovered copy that replaces a stream which
+ * dropped, or one of the listener's own files, which has no URL at all. Turn the bytes into a
+ * same-origin blob (a file:// path would be blocked from the page's secure origin) and play it
+ * through the exact same seek-and-resume path as a network stream.
  */
-function applyFallback(payload) {
+function applyAudioBytes(payload) {
 	if (!payload || !payload.audioBase64) return;
 
-	revokeFallbackBlob();
+	revokeAudioBlob();
 
 	let url;
 	try {
 		url = URL.createObjectURL(base64ToBlob(payload.audioBase64, payload.mime));
 	} catch (error) {
-		console.warn('[player] fallback decode failed', error);
+		console.warn('[player] audio bytes would not decode', error);
 		failPlayback();
 		return;
 	}
 
-	state.fallbackBlobUrl = url;
+	state.audioBlobUrl = url;
 	applyStream({
 		videoId: payload.videoId,
 		url,
 		resumePositionSeconds: payload.resumePositionSeconds,
-		autoResumed: true,
+		autoResumed: payload.autoResumed === true,
 		track: payload.track,
 	});
 }
@@ -461,10 +471,10 @@ function base64ToBlob(base64, mime) {
 	return new Blob([bytes], { type: mime || 'audio/mp4' });
 }
 
-function revokeFallbackBlob() {
-	if (state.fallbackBlobUrl) {
-		URL.revokeObjectURL(state.fallbackBlobUrl);
-		state.fallbackBlobUrl = null;
+function revokeAudioBlob() {
+	if (state.audioBlobUrl) {
+		URL.revokeObjectURL(state.audioBlobUrl);
+		state.audioBlobUrl = null;
 	}
 }
 
@@ -481,8 +491,15 @@ function failPlayback() {
 	paintTransport();
 	showErrorModal(
 		state.track ? state.track.title : 'This track',
-		"We tried several times and couldn't get this playing. It may be private, blocked where you are, or gone.",
+		isLocalRef(state.videoId)
+			? "We couldn't read this file. It may have been moved, renamed or deleted."
+			: "We tried several times and couldn't get this playing. It may be private, blocked where you are, or gone.",
 	);
+}
+
+/** Whether a ref names one of the listener's own files rather than a stream. */
+function isLocalRef(videoRef) {
+	return typeof videoRef === 'string' && videoRef.startsWith(LOCAL_REF);
 }
 
 function playFromResumePoint() {
@@ -606,6 +623,14 @@ async function playTrack(track, queue, index) {
 
 	try {
 		const resolved = await Bridge.play(track.videoId);
+		// Nothing back means the host could not name the track at all, which for one of the
+		// listener's own files means it has left the device. No audio is coming, so waiting
+		// on the recovery banner would be a dead end.
+		if (!resolved) {
+			hideRecovery();
+			showErrorModal(track.title, "We can't find this file any more. It may have been moved, renamed or deleted.");
+			return;
+		}
 		// The host answers with the YouTube Music page for this id, so its names win.
 		// The tapped card is kept as the fallback for everything the page left blank and
 		// for the artwork it already showed, so the cover never changes under the listener.
@@ -926,8 +951,8 @@ function handleHostMessage(raw) {
 			applyStream(payload);
 			break;
 
-		case 'fallbackReady':
-			applyFallback(payload);
+		case 'audioBytes':
+			applyAudioBytes(payload);
 			break;
 
 		case 'retryStarted':
@@ -1463,6 +1488,100 @@ function renderArtist(detail) {
 	]);
 }
 
+/* ------------------------------------------------------------------ music on this device */
+
+/**
+ * The device's own files are read only when the listener opens this page: on Android the
+ * scan needs a permission answer, and a dialog that appears before anything was asked for
+ * is a dialog that gets refused.
+ */
+async function openDevice(lookAgain) {
+	const token = ++renderToken;
+	// "Look again" reloads the page it is standing on; pushing it twice would spend two
+	// Back presses to leave it.
+	if (state.view !== 'device') {
+		pushView('device');
+	}
+
+	els.deviceHero.innerHTML = '';
+	els.deviceTracks.innerHTML = '';
+
+	if (state.deviceShelf && !lookAgain) {
+		renderDevice();
+		return;
+	}
+
+	els.deviceHero.appendChild(spinnerNode());
+
+	let listing = null;
+	try {
+		listing = await Bridge.localTracks();
+	} catch (error) {
+		console.warn('[device] scan failed', error);
+	}
+	if (token !== renderToken) return;
+
+	if (!listing) {
+		els.deviceHero.innerHTML = '';
+		els.deviceHero.appendChild(noticeNode("We couldn't look at this device's music. Try again in a moment."));
+		return;
+	}
+
+	state.deviceShelf = { allowed: listing.allowed !== false, tracks: listing.tracks || [] };
+	renderDevice();
+}
+
+function renderDevice() {
+	const listing = state.deviceShelf || { allowed: true, tracks: [] };
+	const tracks = listing.tracks;
+
+	els.deviceHero.innerHTML = '';
+	els.deviceTracks.innerHTML = '';
+
+	const hero = el('div', 'hero');
+	hero.appendChild(coverNode(null, 'hero-art'));
+
+	const meta = el('div', 'row-meta');
+	meta.appendChild(el('p', 'hero-eyebrow', 'On this device'));
+	meta.appendChild(el('h2', 'hero-title', 'Your music'));
+
+	let sub = 'Waiting for you to allow this';
+	if (listing.allowed) {
+		sub = tracks.length
+			? `${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'} played straight from the file`
+			: 'Played straight from the file';
+	}
+	meta.appendChild(el('p', 'hero-sub', sub));
+	hero.appendChild(meta);
+	els.deviceHero.appendChild(hero);
+
+	if (!listing.allowed) {
+		els.deviceHero.appendChild(lookAgainButton());
+		els.deviceTracks.appendChild(noticeNode('Press "Look again" and let Sonora read your music when the device asks. Nothing is copied anywhere: a song is read while it plays.'));
+		return;
+	}
+
+	if (!tracks.length) {
+		els.deviceHero.appendChild(lookAgainButton());
+		els.deviceTracks.appendChild(noticeNode('No music files here yet. Songs you keep on this device show up in this list.'));
+		return;
+	}
+
+	const actions = actionRow(tracks);
+	actions.appendChild(lookAgainButton());
+	els.deviceHero.appendChild(actions);
+
+	tracks.forEach((track, index) => els.deviceTracks.appendChild(songRow(track, tracks, index)));
+}
+
+/** The shelf is a snapshot of a folder the listener edits outside the app, so re-reading it is a standing offer. */
+function lookAgainButton() {
+	const button = el('button', 'btn-text', 'Look again');
+	button.type = 'button';
+	button.addEventListener('click', () => openDevice(true));
+	return button;
+}
+
 /** The bar only exists once there is something on it; an idle app is just a page. */
 function paintBarVisibility() {
 	els.playerBar.hidden = !state.track;
@@ -1960,6 +2079,8 @@ function wireControls() {
 			input.select();
 		}
 	});
+
+	els.deviceOpen.addEventListener('click', () => openDevice(false));
 
 	els.playlistCreate.addEventListener('click', createPlaylistFromPicker);
 	els.playlistNameInput.addEventListener('keydown', (event) => {

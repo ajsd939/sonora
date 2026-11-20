@@ -14,17 +14,20 @@ public sealed class SonoraBridgeTarget
 	private readonly MusicCatalogService _catalog;
 	private readonly PlaybackSupervisor _supervisor;
 	private readonly LrcLibService _lyrics;
+	private readonly LocalMusicService _local;
 
 	public SonoraBridgeTarget(
 		TrackSearchService search,
 		MusicCatalogService catalog,
 		PlaybackSupervisor supervisor,
-		LrcLibService lyrics)
+		LrcLibService lyrics,
+		LocalMusicService local)
 	{
 		_search = search;
 		_catalog = catalog;
 		_supervisor = supervisor;
 		_lyrics = lyrics;
+		_local = local;
 	}
 
 	/// <summary>Catalogue lookup for the search grid. Errors surface as an empty grid.</summary>
@@ -84,9 +87,34 @@ public sealed class SonoraBridgeTarget
 		}
 	}
 
-	/// <summary>Begins playback; the audio URL follows as a <c>streamReady</c> message.</summary>
+	/// <summary>
+	/// The music already on the device, asking for access the first time the shelf is opened.
+	/// A refusal is an answer of its own, not an empty shelf.
+	/// </summary>
+	public async Task<LocalShelfDto> LocalTracks()
+	{
+		try
+		{
+			if (!await _local.RequestAccessAsync().ConfigureAwait(false))
+			{
+				return new LocalShelfDto { Allowed = false };
+			}
+
+			return new LocalShelfDto { Allowed = true, Tracks = await _local.ScanAsync().ConfigureAwait(false) };
+		}
+		catch (Exception exception)
+		{
+			System.Diagnostics.Debug.WriteLine($"[sonora] local shelf failed: {FailureSummary.Of(exception)}");
+			return new LocalShelfDto { Allowed = true };
+		}
+	}
+
+	/// <summary>
+	/// Begins playback; the audio follows as a <c>streamReady</c> message, or as <c>audioBytes</c>
+	/// when the track is one of the listener's own files.
+	/// </summary>
 	/// <remarks>
-	/// Only the id crosses the bridge. A whole <see cref="TrackDto"/> cannot: the page's
+	/// Only the reference crosses the bridge. A whole <see cref="TrackDto"/> cannot: the page's
 	/// library rows are a smaller shape than the DTO, and binding one here would reject the
 	/// call before playback ever started.
 	/// </remarks>

@@ -32,6 +32,7 @@ public sealed class PlaybackSupervisor : IDisposable
 	private readonly TrackSearchService _search;
 	private readonly IStreamBridge _bridge;
 	private readonly FallbackAudioCache _fallback;
+	private readonly LocalMusicService _local;
 	private readonly Lock _gate = new();
 	private readonly Timer _watchdog;
 
@@ -49,12 +50,14 @@ public sealed class PlaybackSupervisor : IDisposable
 		StrictAudioStreamResolver resolver,
 		TrackSearchService search,
 		IStreamBridge bridge,
-		FallbackAudioCache fallback)
+		FallbackAudioCache fallback,
+		LocalMusicService local)
 	{
 		_resolver = resolver;
 		_search = search;
 		_bridge = bridge;
 		_fallback = fallback;
+		_local = local;
 
 		_resolver.RetryScheduled += payload => _bridge.Send(HostMessageType.RetryStarted, payload);
 		_watchdog = new Timer(_ => EvaluateClock(), null, WatchdogInterval, WatchdogInterval);
@@ -72,6 +75,11 @@ public sealed class PlaybackSupervisor : IDisposable
 		if (string.IsNullOrWhiteSpace(videoUrlOrId))
 		{
 			return null;
+		}
+
+		if (TrackRefs.IsLocal(videoUrlOrId))
+		{
+			return await PlayLocalAsync(videoUrlOrId).ConfigureAwait(false);
 		}
 
 		var key = YouTubeRefs.ToKey(videoUrlOrId);
@@ -99,15 +107,57 @@ public sealed class PlaybackSupervisor : IDisposable
 			};
 		}
 
-		CancellationToken cancellationToken;
+		var cancellationToken = BeginSession(videoUrlOrId, track);
+
+		_ = RunResolutionAsync(videoUrlOrId, resumeSeconds: 0, stallReason: null, autoResumed: false, cancellationToken);
+		return track;
+	}
+
+	/// <summary>
+	/// A file on the device needs no resolver and cannot drop mid-song: the host reads it and hands
+	/// over the bytes. The session wrapped around it is the same one a streamed track starts, so the
+	/// notification, the wake locks and the resume bookkeeping all behave as they always have.
+	/// Null means the shelf has no such row even after a rebuild, which the page reads as a track
+	/// that will not start.
+	/// </summary>
+	private async Task<TrackDto?> PlayLocalAsync(string reference)
+	{
+		// A restarted app has forgotten where the files live, while the listener's library rows do
+		// not: rebuild the shelf once so a track they kept playing still plays.
+		var track = _local.Find(reference);
+		if (track is null)
+		{
+			await _local.ScanAsync().ConfigureAwait(false);
+			track = _local.Find(reference);
+		}
+
+		if (track is null)
+		{
+			System.Diagnostics.Debug.WriteLine($"[sonora] local ref is not on the shelf: {reference}");
+			return null;
+		}
+
+		var cancellationToken = BeginSession(reference, track);
+
+		_ = RunResolutionAsync(reference, resumeSeconds: 0, stallReason: null, autoResumed: false, cancellationToken);
+		return track;
+	}
+
+	/// <summary>
+	/// Opens the session for one track: the previous one is cancelled, the clock is put back to
+	/// zero, and the platform is told sound is coming, which is what keeps it alive off screen.
+	/// </summary>
+	private CancellationToken BeginSession(string reference, TrackDto track)
+	{
+		CancellationToken token;
 		lock (_gate)
 		{
 			_session?.Cancel();
 			_session?.Dispose();
 			_session = new CancellationTokenSource();
-			cancellationToken = _session.Token;
+			token = _session.Token;
 
-			_videoRef = videoUrlOrId;
+			_videoRef = reference;
 			_track = track;
 			_positionSeconds = 0;
 			_lastAdvancedPositionSeconds = 0;
@@ -128,8 +178,7 @@ public sealed class PlaybackSupervisor : IDisposable
 			track.Artist);
 #endif
 
-		_ = RunResolutionAsync(videoUrlOrId, resumeSeconds: 0, stallReason: null, autoResumed: false, cancellationToken);
-		return track;
+		return token;
 	}
 
 	/// <summary>
@@ -283,6 +332,22 @@ public sealed class PlaybackSupervisor : IDisposable
 
 		try
 		{
+			// A file the listener owns never goes near the resolver: there is no URL that could
+			// have expired, only bytes to read and hand over.
+			if (TrackRefs.IsLocal(videoRef))
+			{
+				if (await TryLocalAsync(videoRef, resumeSeconds, track, autoResumed, cancellationToken).ConfigureAwait(false))
+				{
+					return;
+				}
+
+				// The listener may have skipped during the read; a stale error would pause the new
+				// track, so let the cancellation unwind instead of reporting failure.
+				cancellationToken.ThrowIfCancellationRequested();
+				FailTerminal(videoRef, resumeSeconds, attempts: 0, reason: "the file could not be read");
+				return;
+			}
+
 			// A stream that stopped mid-song is replaced with a stable local copy first;
 			// only if that download fails do we fall back to re-resolving another URL.
 			if (autoResumed && await TryFallbackAsync(videoRef, resumeSeconds, track, cancellationToken).ConfigureAwait(false))
@@ -338,21 +403,7 @@ public sealed class PlaybackSupervisor : IDisposable
 			// the new track, so let the cancellation unwind instead of reporting failure.
 			cancellationToken.ThrowIfCancellationRequested();
 
-			lock (_gate)
-			{
-				_recovering = false;
-				_isPlaying = false;
-			}
-
-			NotifyServicePlaying(false);
-
-			_bridge.Send(HostMessageType.PlaybackError, new PlaybackErrorPayload
-			{
-				VideoId = YouTubeRefs.ToKey(videoRef),
-				Attempts = result.AttemptsUsed,
-				Reason = result.Error,
-				ResumePositionSeconds = result.ResumePosition.TotalSeconds,
-			});
+			FailTerminal(videoRef, result.ResumePosition.TotalSeconds, result.AttemptsUsed, result.Error);
 		}
 		catch (OperationCanceledException)
 		{
@@ -360,21 +411,7 @@ public sealed class PlaybackSupervisor : IDisposable
 		}
 		catch (Exception exception)
 		{
-			lock (_gate)
-			{
-				_recovering = false;
-				_isPlaying = false;
-			}
-
-			NotifyServicePlaying(false);
-
-			_bridge.Send(HostMessageType.PlaybackError, new PlaybackErrorPayload
-			{
-				VideoId = YouTubeRefs.ToKey(videoRef),
-				Attempts = StrictAudioStreamResolver.MaxAttempts,
-				Reason = FailureSummary.Of(exception),
-				ResumePositionSeconds = resumeSeconds,
-			});
+			FailTerminal(videoRef, resumeSeconds, StrictAudioStreamResolver.MaxAttempts, FailureSummary.Of(exception));
 		}
 	}
 
@@ -411,12 +448,13 @@ public sealed class PlaybackSupervisor : IDisposable
 
 			NotifyServicePlaying(true);
 
-			_bridge.Send(HostMessageType.FallbackReady, new FallbackReadyPayload
+			_bridge.Send(HostMessageType.AudioBytes, new AudioBytesPayload
 			{
 				VideoId = YouTubeRefs.ToKey(videoRef),
 				AudioBase64 = audio.Base64,
 				Mime = audio.Mime,
 				ResumePositionSeconds = resumeSeconds,
+				AutoResumed = true,
 				Track = track,
 			});
 			return true;
@@ -433,6 +471,70 @@ public sealed class PlaybackSupervisor : IDisposable
 	}
 
 	/// <summary>
+	/// Reads one of the listener's own files and hands the page its bytes. False means the file is
+	/// gone or too large to carry, and unlike a stream there is no second copy of it anywhere to
+	/// try, so the caller reports the failure instead of starting another cycle.
+	/// </summary>
+	private async Task<bool> TryLocalAsync(
+		string reference,
+		double resumeSeconds,
+		TrackDto? track,
+		bool autoResumed,
+		CancellationToken cancellationToken)
+	{
+		var audio = await _local.ReadAsync(reference, cancellationToken).ConfigureAwait(false);
+		if (audio is null || cancellationToken.IsCancellationRequested)
+		{
+			return false;
+		}
+
+		lock (_gate)
+		{
+			_recovering = false;
+			_isPlaying = true;
+			_lastAdvancedUtc = DateTimeOffset.UtcNow;
+			_lastAdvancedPositionSeconds = resumeSeconds;
+			_watchdogSuspendedUntilUtc = DateTimeOffset.UtcNow + ResumeSettleWindow;
+		}
+
+		NotifyServicePlaying(true);
+
+		_bridge.Send(HostMessageType.AudioBytes, new AudioBytesPayload
+		{
+			VideoId = TrackRefs.ToKey(reference),
+			AudioBase64 = audio.Base64,
+			Mime = audio.Mime,
+			ResumePositionSeconds = resumeSeconds,
+			AutoResumed = autoResumed,
+			Track = track,
+		});
+		return true;
+	}
+
+	/// <summary>
+	/// Gives up on one track: the watchdog stops caring, the service lets the CPU sleep again, and
+	/// the page says so in plain words.
+	/// </summary>
+	private void FailTerminal(string videoRef, double resumeSeconds, int attempts, string? reason)
+	{
+		lock (_gate)
+		{
+			_recovering = false;
+			_isPlaying = false;
+		}
+
+		NotifyServicePlaying(false);
+
+		_bridge.Send(HostMessageType.PlaybackError, new PlaybackErrorPayload
+		{
+			VideoId = TrackRefs.ToKey(videoRef),
+			Attempts = attempts,
+			Reason = reason,
+			ResumePositionSeconds = resumeSeconds,
+		});
+	}
+
+	/// <summary>
 	/// Guards against late events from a source that has already been swapped out. A
 	/// report carrying no id is attributed to whatever track is loaded.
 	/// </summary>
@@ -445,7 +547,7 @@ public sealed class PlaybackSupervisor : IDisposable
 				return false;
 			}
 
-			return string.IsNullOrEmpty(reportedVideoId) || YouTubeRefs.ToKey(reportedVideoId) == YouTubeRefs.ToKey(_videoRef);
+			return string.IsNullOrEmpty(reportedVideoId) || TrackRefs.ToKey(reportedVideoId) == TrackRefs.ToKey(_videoRef);
 		}
 	}
 }

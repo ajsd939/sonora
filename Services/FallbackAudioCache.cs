@@ -4,8 +4,8 @@ using YoutubeExplode.Videos.Streams;
 
 namespace Sonora.Services;
 
-/// <summary>A downloaded local copy of a track's audio, encoded for the page to play.</summary>
-public sealed record FallbackAudio(string Base64, string Mime);
+/// <summary>Audio the host holds as bytes rather than as a URL, encoded for the page to play.</summary>
+public sealed record AudioBytes(string Base64, string Mime);
 
 /// <summary>
 /// Self-healing recovery. A stream that stops mid-song is replaced with a local copy downloaded
@@ -77,12 +77,12 @@ public sealed class FallbackAudioCache
 	}
 
 	/// <summary>Reads a downloaded file into the base64 payload and MIME type the page needs.</summary>
-	public async Task<FallbackAudio?> LoadAsync(string path, CancellationToken cancellationToken = default)
+	public async Task<AudioBytes?> LoadAsync(string path, CancellationToken cancellationToken = default)
 	{
 		try
 		{
 			var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-			return new FallbackAudio(Convert.ToBase64String(bytes), MimeFor(path));
+			return new AudioBytes(Convert.ToBase64String(bytes), MimeFor(path));
 		}
 		catch (OperationCanceledException)
 		{

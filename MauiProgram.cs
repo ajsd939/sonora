@@ -37,6 +37,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<LrcLibService>();
 		builder.Services.AddSingleton<StrictAudioStreamResolver>();
 		builder.Services.AddSingleton<FallbackAudioCache>();
+		builder.Services.AddSingleton<LocalMusicService>();
 		builder.Services.AddSingleton<HybridWebViewBridge>();
 
 		// The engine depends on the abstraction, the page depends on the concrete
