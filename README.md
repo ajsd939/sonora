@@ -1,7 +1,7 @@
 # Sonora
 
-**Status: beta (0.9.1).** Search, artist and album pages, playlists you build yourself,
-synced lyrics and background playback, all backed by YouTube Music.
+**Status: beta (0.9.2).** Search, artist and album pages, playlists you build yourself,
+your own music files, synced lyrics and background playback, all backed by YouTube Music.
 
 ## What it is
 
